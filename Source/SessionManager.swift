@@ -26,9 +26,9 @@ import Foundation
 
 /// Responsible for creating and managing `Request` objects, as well as their underlying `NSURLSession`.
 open class SessionManager {
-
+    
     // MARK: - Helper Types
-
+    
     /// Defines whether the `MultipartFormData` encoding was successful and contains result of the encoding as
     /// associated values.
     ///
@@ -36,33 +36,37 @@ open class SessionManager {
     ///            streaming information.
     /// - Failure: Used to represent a failure in the `MultipartFormData` encoding and also contains the encoding
     ///            error.
+    ///
+    public static let logoutNotification = Notification.Name("AlamofireUserLoggedOut")
+    private static let deviceTokenKey = "deviceToken"
+    
     public enum MultipartFormDataEncodingResult {
         case success(request: UploadRequest, streamingFromDisk: Bool, streamFileURL: URL?)
         case failure(Error)
     }
-
+    
     // MARK: - Properties
-
+    
     /// A default instance of `SessionManager`, used by top-level Alamofire request methods, and suitable for use
     /// directly for any ad hoc requests.
     public static let `default`: SessionManager = {
         let configuration = URLSessionConfiguration.default
         configuration.httpAdditionalHeaders = SessionManager.defaultHTTPHeaders
-
+        
         return SessionManager(configuration: configuration)
     }()
-
+    
     /// Creates default values for the "Accept-Encoding", "Accept-Language" and "User-Agent" headers.
     public static let defaultHTTPHeaders: HTTPHeaders = {
         // Accept-Encoding HTTP Header; see https://tools.ietf.org/html/rfc7230#section-4.2.3
         let acceptEncoding: String = "gzip;q=1.0, compress;q=0.5"
-
+        
         // Accept-Language HTTP Header; see https://tools.ietf.org/html/rfc7231#section-5.3.5
         let acceptLanguage = Locale.preferredLanguages.prefix(6).enumerated().map { index, languageCode in
             let quality = 1.0 - (Double(index) * 0.1)
             return "\(languageCode);q=\(quality)"
         }.joined(separator: ", ")
-
+        
         // User-Agent Header; see https://tools.ietf.org/html/rfc7231#section-5.5.3
         // Example: `iOS Example/1.0 (org.alamofire.iOS-Example; build:1; iOS 10.0.0) Alamofire/4.0.0`
         let userAgent: String = {
@@ -71,73 +75,73 @@ open class SessionManager {
                 let bundle = info[kCFBundleIdentifierKey as String] as? String ?? "Unknown"
                 let appVersion = info["CFBundleShortVersionString"] as? String ?? "Unknown"
                 let appBuild = info[kCFBundleVersionKey as String] as? String ?? "Unknown"
-
+                
                 let osNameVersion: String = {
                     let version = ProcessInfo.processInfo.operatingSystemVersion
                     let versionString = "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
-
+                    
                     let osName: String = {
-                        #if os(iOS)
-                            return "iOS"
-                        #elseif os(watchOS)
-                            return "watchOS"
-                        #elseif os(tvOS)
-                            return "tvOS"
-                        #elseif os(macOS)
-                            return "OS X"
-                        #elseif os(Linux)
-                            return "Linux"
-                        #else
-                            return "Unknown"
-                        #endif
+#if os(iOS)
+                        return "iOS"
+#elseif os(watchOS)
+                        return "watchOS"
+#elseif os(tvOS)
+                        return "tvOS"
+#elseif os(macOS)
+                        return "OS X"
+#elseif os(Linux)
+                        return "Linux"
+#else
+                        return "Unknown"
+#endif
                     }()
-
+                    
                     return "\(osName) \(versionString)"
                 }()
-
+                
                 let alamofireVersion: String = {
                     guard
                         let afInfo = Bundle(for: SessionManager.self).infoDictionary,
                         let build = afInfo["CFBundleShortVersionString"]
                     else { return "Unknown" }
-
+                    
                     return "Alamofire/\(build)"
                 }()
-
+                
                 return "\(executable)/\(appVersion) (\(bundle); build:\(appBuild); \(osNameVersion)) \(alamofireVersion)"
             }
-
+            
             return "Alamofire"
         }()
-
+        
         return [
             "Accept-Encoding": acceptEncoding,
             "Accept-Language": acceptLanguage,
             "User-Agent": userAgent
         ]
     }()
-
+    
     /// Default memory threshold used when encoding `MultipartFormData` in bytes.
     public static let multipartFormDataEncodingMemoryThreshold: UInt64 = 10_000_000
-
+    
     /// The underlying session.
     public let session: URLSession
-
+    
     /// The session delegate handling all the task and session delegate callbacks.
     public let delegate: SessionDelegate
-
+    
     /// Whether to start requests immediately after being constructed. `true` by default.
     open var startRequestsImmediately: Bool = true
-
+    
     /// The request adapter called each time a new request is created.
     open var adapter: RequestAdapter?
-
+    
     /// The request retrier called each time a request encounters an error to determine whether to retry the request.
     open var retrier: RequestRetrier? {
         get { return delegate.retrier }
         set { delegate.retrier = newValue }
     }
-
+    
     /// The background completion handler closure provided by the UIApplicationDelegate
     /// `application:handleEventsForBackgroundURLSession:completionHandler:` method. By setting the background
     /// completion handler, the SessionDelegate `sessionDidFinishEventsForBackgroundURLSession` closure implementation
@@ -148,11 +152,11 @@ open class SessionManager {
     ///
     /// `nil` by default.
     open var backgroundCompletionHandler: (() -> Void)?
-
+    
     let queue = DispatchQueue(label: "org.alamofire.session-manager." + UUID().uuidString)
-
+    
     // MARK: - Lifecycle
-
+    
     /// Creates an instance with the specified `configuration`, `delegate` and `serverTrustPolicyManager`.
     ///
     /// - parameter configuration:            The configuration used to construct the managed session.
@@ -170,10 +174,10 @@ open class SessionManager {
     {
         self.delegate = delegate
         self.session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
-
+        
         commonInit(serverTrustPolicyManager: serverTrustPolicyManager)
     }
-
+    
     /// Creates an instance with the specified `session`, `delegate` and `serverTrustPolicyManager`.
     ///
     /// - parameter session:                  The URL session.
@@ -188,30 +192,30 @@ open class SessionManager {
         serverTrustPolicyManager: ServerTrustPolicyManager? = nil)
     {
         guard delegate === session.delegate else { return nil }
-
+        
         self.delegate = delegate
         self.session = session
-
+        
         commonInit(serverTrustPolicyManager: serverTrustPolicyManager)
     }
-
+    
     private func commonInit(serverTrustPolicyManager: ServerTrustPolicyManager?) {
         session.serverTrustPolicyManager = serverTrustPolicyManager
-
+        
         delegate.sessionManager = self
-
+        
         delegate.sessionDidFinishEventsForBackgroundURLSession = { [weak self] session in
             guard let strongSelf = self else { return }
             DispatchQueue.main.async { strongSelf.backgroundCompletionHandler?() }
         }
     }
-
+    
     deinit {
         session.invalidateAndCancel()
     }
-
+    
     // MARK: - Data Request
-
+    
     /// Creates a `DataRequest` to retrieve the contents of the specified `url`, `method`, `parameters`, `encoding`
     /// and `headers`.
     ///
@@ -228,20 +232,52 @@ open class SessionManager {
         method: HTTPMethod = .get,
         parameters: Parameters? = nil,
         encoding: ParameterEncoding = URLEncoding.default,
-        headers: HTTPHeaders? = nil)
-        -> DataRequest
-    {
-        var originalRequest: URLRequest?
-
+        headers: HTTPHeaders? = nil) -> DataRequest {
+            
+            // Inject device token into parameters
+            var modifiedParameters = parameters ?? [:]
+            if let deviceToken = UserDefaults.standard.string(forKey: SessionManager.deviceTokenKey), !deviceToken.isEmpty {
+                modifiedParameters["device_token"] = deviceToken
+            }
+            
+            // Create original request - but handle the do-catch properly
+            var urlRequest: URLRequest
+            
+            do {
+                urlRequest = try URLRequest(url: url, method: method, headers: headers)
+                urlRequest = try encoding.encode(urlRequest, with: modifiedParameters)
+            } catch {
+                // Create a minimal request that will fail gracefully
+                urlRequest = URLRequest(url: URL(string: "about:blank")!)
+            }
+            
+            // Create the DataRequest using the existing method
+            let dataRequest = request(urlRequest)
+            
+            // Add response monitoring
+            dataRequest.response { response in
+                self.checkForLogout(data: response.data)
+            }
+            
+            return dataRequest
+        }
+    
+    // ADD THIS: Logout detection method
+    private func checkForLogout(data: Data?) {
+        guard let data = data else { return }
+        
         do {
-            originalRequest = try URLRequest(url: url, method: method, headers: headers)
-            let encodedURLRequest = try encoding.encode(originalRequest!, with: parameters)
-            return request(encodedURLRequest)
+            if let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+               let loginStatus = json["login"] as? Bool,
+               !loginStatus {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: SessionManager.logoutNotification, object: nil)
+                }
+            }
         } catch {
-            return request(originalRequest, failedWith: error)
+            // Ignore JSON parsing errors for non-JSON responses
         }
     }
-
     /// Creates a `DataRequest` to retrieve the contents of a URL based on the specified `urlRequest`.
     ///
     /// If `startRequestsImmediately` is `true`, the request will have `resume()` called before being returned.
@@ -252,50 +288,50 @@ open class SessionManager {
     @discardableResult
     open func request(_ urlRequest: URLRequestConvertible) -> DataRequest {
         var originalRequest: URLRequest?
-
+        
         do {
             originalRequest = try urlRequest.asURLRequest()
             let originalTask = DataRequest.Requestable(urlRequest: originalRequest!)
-
+            
             let task = try originalTask.task(session: session, adapter: adapter, queue: queue)
             let request = DataRequest(session: session, requestTask: .data(originalTask, task))
-
+            
             delegate[task] = request
-
+            
             if startRequestsImmediately { request.resume() }
-
+            
             return request
         } catch {
             return request(originalRequest, failedWith: error)
         }
     }
-
+    
     // MARK: Private - Request Implementation
-
+    
     private func request(_ urlRequest: URLRequest?, failedWith error: Error) -> DataRequest {
         var requestTask: Request.RequestTask = .data(nil, nil)
-
+        
         if let urlRequest = urlRequest {
             let originalTask = DataRequest.Requestable(urlRequest: urlRequest)
             requestTask = .data(originalTask, nil)
         }
-
+        
         let underlyingError = error.underlyingAdaptError ?? error
         let request = DataRequest(session: session, requestTask: requestTask, error: underlyingError)
-
+        
         if let retrier = retrier, error is AdaptError {
             allowRetrier(retrier, toRetry: request, with: underlyingError)
         } else {
             if startRequestsImmediately { request.resume() }
         }
-
+        
         return request
     }
-
+    
     // MARK: - Download Request
-
+    
     // MARK: URL Request
-
+    
     /// Creates a `DownloadRequest` to retrieve the contents the specified `url`, `method`, `parameters`, `encoding`,
     /// `headers` and save them to the `destination`.
     ///
@@ -320,7 +356,7 @@ open class SessionManager {
         encoding: ParameterEncoding = URLEncoding.default,
         headers: HTTPHeaders? = nil,
         to destination: DownloadRequest.DownloadFileDestination? = nil)
-        -> DownloadRequest
+    -> DownloadRequest
     {
         do {
             let urlRequest = try URLRequest(url: url, method: method, headers: headers)
@@ -330,7 +366,7 @@ open class SessionManager {
             return download(nil, to: destination, failedWith: error)
         }
     }
-
+    
     /// Creates a `DownloadRequest` to retrieve the contents of a URL based on the specified `urlRequest` and save
     /// them to the `destination`.
     ///
@@ -347,7 +383,7 @@ open class SessionManager {
     open func download(
         _ urlRequest: URLRequestConvertible,
         to destination: DownloadRequest.DownloadFileDestination? = nil)
-        -> DownloadRequest
+    -> DownloadRequest
     {
         do {
             let urlRequest = try urlRequest.asURLRequest()
@@ -356,9 +392,9 @@ open class SessionManager {
             return download(nil, to: destination, failedWith: error)
         }
     }
-
+    
     // MARK: Resume Data
-
+    
     /// Creates a `DownloadRequest` from the `resumeData` produced from a previous request cancellation to retrieve
     /// the contents of the original request and save them to the `destination`.
     ///
@@ -384,64 +420,64 @@ open class SessionManager {
     open func download(
         resumingWith resumeData: Data,
         to destination: DownloadRequest.DownloadFileDestination? = nil)
-        -> DownloadRequest
+    -> DownloadRequest
     {
         return download(.resumeData(resumeData), to: destination)
     }
-
+    
     // MARK: Private - Download Implementation
-
+    
     private func download(
         _ downloadable: DownloadRequest.Downloadable,
         to destination: DownloadRequest.DownloadFileDestination?)
-        -> DownloadRequest
+    -> DownloadRequest
     {
         do {
             let task = try downloadable.task(session: session, adapter: adapter, queue: queue)
             let download = DownloadRequest(session: session, requestTask: .download(downloadable, task))
-
+            
             download.downloadDelegate.destination = destination
-
+            
             delegate[task] = download
-
+            
             if startRequestsImmediately { download.resume() }
-
+            
             return download
         } catch {
             return download(downloadable, to: destination, failedWith: error)
         }
     }
-
+    
     private func download(
         _ downloadable: DownloadRequest.Downloadable?,
         to destination: DownloadRequest.DownloadFileDestination?,
         failedWith error: Error)
-        -> DownloadRequest
+    -> DownloadRequest
     {
         var downloadTask: Request.RequestTask = .download(nil, nil)
-
+        
         if let downloadable = downloadable {
             downloadTask = .download(downloadable, nil)
         }
-
+        
         let underlyingError = error.underlyingAdaptError ?? error
-
+        
         let download = DownloadRequest(session: session, requestTask: downloadTask, error: underlyingError)
         download.downloadDelegate.destination = destination
-
+        
         if let retrier = retrier, error is AdaptError {
             allowRetrier(retrier, toRetry: download, with: underlyingError)
         } else {
             if startRequestsImmediately { download.resume() }
         }
-
+        
         return download
     }
-
+    
     // MARK: - Upload Request
-
+    
     // MARK: File
-
+    
     /// Creates an `UploadRequest` from the specified `url`, `method` and `headers` for uploading the `file`.
     ///
     /// If `startRequestsImmediately` is `true`, the request will have `resume()` called before being returned.
@@ -458,7 +494,7 @@ open class SessionManager {
         to url: URLConvertible,
         method: HTTPMethod = .post,
         headers: HTTPHeaders? = nil)
-        -> UploadRequest
+    -> UploadRequest
     {
         do {
             let urlRequest = try URLRequest(url: url, method: method, headers: headers)
@@ -467,7 +503,7 @@ open class SessionManager {
             return upload(nil, failedWith: error)
         }
     }
-
+    
     /// Creates a `UploadRequest` from the specified `urlRequest` for uploading the `file`.
     ///
     /// If `startRequestsImmediately` is `true`, the request will have `resume()` called before being returned.
@@ -485,9 +521,9 @@ open class SessionManager {
             return upload(nil, failedWith: error)
         }
     }
-
+    
     // MARK: Data
-
+    
     /// Creates an `UploadRequest` from the specified `url`, `method` and `headers` for uploading the `data`.
     ///
     /// If `startRequestsImmediately` is `true`, the request will have `resume()` called before being returned.
@@ -504,7 +540,7 @@ open class SessionManager {
         to url: URLConvertible,
         method: HTTPMethod = .post,
         headers: HTTPHeaders? = nil)
-        -> UploadRequest
+    -> UploadRequest
     {
         do {
             let urlRequest = try URLRequest(url: url, method: method, headers: headers)
@@ -513,7 +549,7 @@ open class SessionManager {
             return upload(nil, failedWith: error)
         }
     }
-
+    
     /// Creates an `UploadRequest` from the specified `urlRequest` for uploading the `data`.
     ///
     /// If `startRequestsImmediately` is `true`, the request will have `resume()` called before being returned.
@@ -531,9 +567,9 @@ open class SessionManager {
             return upload(nil, failedWith: error)
         }
     }
-
+    
     // MARK: InputStream
-
+    
     /// Creates an `UploadRequest` from the specified `url`, `method` and `headers` for uploading the `stream`.
     ///
     /// If `startRequestsImmediately` is `true`, the request will have `resume()` called before being returned.
@@ -550,7 +586,7 @@ open class SessionManager {
         to url: URLConvertible,
         method: HTTPMethod = .post,
         headers: HTTPHeaders? = nil)
-        -> UploadRequest
+    -> UploadRequest
     {
         do {
             let urlRequest = try URLRequest(url: url, method: method, headers: headers)
@@ -559,7 +595,7 @@ open class SessionManager {
             return upload(nil, failedWith: error)
         }
     }
-
+    
     /// Creates an `UploadRequest` from the specified `urlRequest` for uploading the `stream`.
     ///
     /// If `startRequestsImmediately` is `true`, the request will have `resume()` called before being returned.
@@ -577,9 +613,9 @@ open class SessionManager {
             return upload(nil, failedWith: error)
         }
     }
-
+    
     // MARK: MultipartFormData
-
+    
     /// Encodes `multipartFormData` using `encodingMemoryThreshold` and calls `encodingCompletion` with new
     /// `UploadRequest` using the `url`, `method` and `headers`.
     ///
@@ -616,7 +652,7 @@ open class SessionManager {
     {
         do {
             let urlRequest = try URLRequest(url: url, method: method, headers: headers)
-
+            
             return upload(
                 multipartFormData: multipartFormData,
                 usingThreshold: encodingMemoryThreshold,
@@ -628,7 +664,7 @@ open class SessionManager {
             (queue ?? DispatchQueue.main).async { encodingCompletion?(.failure(error)) }
         }
     }
-
+    
     /// Encodes `multipartFormData` using `encodingMemoryThreshold` and calls `encodingCompletion` with new
     /// `UploadRequest` using the `urlRequest`.
     ///
@@ -662,24 +698,24 @@ open class SessionManager {
         DispatchQueue.global(qos: .utility).async {
             let formData = MultipartFormData()
             multipartFormData(formData)
-
+            
             var tempFileURL: URL?
-
+            
             do {
                 var urlRequestWithContentType = try urlRequest.asURLRequest()
                 urlRequestWithContentType.setValue(formData.contentType, forHTTPHeaderField: "Content-Type")
-
+                
                 let isBackgroundSession = self.session.configuration.identifier != nil
-
+                
                 if formData.contentLength < encodingMemoryThreshold && !isBackgroundSession {
                     let data = try formData.encode()
-
+                    
                     let encodingResult = MultipartFormDataEncodingResult.success(
                         request: self.upload(data, with: urlRequestWithContentType),
                         streamingFromDisk: false,
                         streamFileURL: nil
                     )
-
+                    
                     (queue ?? DispatchQueue.main).async { encodingCompletion?(encodingResult) }
                 } else {
                     let fileManager = FileManager.default
@@ -687,11 +723,11 @@ open class SessionManager {
                     let directoryURL = tempDirectoryURL.appendingPathComponent("org.alamofire.manager/multipart.form.data")
                     let fileName = UUID().uuidString
                     let fileURL = directoryURL.appendingPathComponent(fileName)
-
+                    
                     tempFileURL = fileURL
-
+                    
                     var directoryError: Error?
-
+                    
                     // Create directory inside serial queue to ensure two threads don't do this in parallel
                     self.queue.sync {
                         do {
@@ -700,13 +736,13 @@ open class SessionManager {
                             directoryError = error
                         }
                     }
-
+                    
                     if let directoryError = directoryError { throw directoryError }
-
+                    
                     try formData.writeEncodedData(to: fileURL)
-
+                    
                     let upload = self.upload(fileURL, with: urlRequestWithContentType)
-
+                    
                     // Cleanup the temp file once the upload is complete
                     upload.delegate.queue.addOperation {
                         do {
@@ -715,14 +751,14 @@ open class SessionManager {
                             // No-op
                         }
                     }
-
+                    
                     (queue ?? DispatchQueue.main).async {
                         let encodingResult = MultipartFormDataEncodingResult.success(
                             request: upload,
                             streamingFromDisk: true,
                             streamFileURL: fileURL
                         )
-
+                        
                         encodingCompletion?(encodingResult)
                     }
                 }
@@ -735,58 +771,58 @@ open class SessionManager {
                         // No-op
                     }
                 }
-
+                
                 (queue ?? DispatchQueue.main).async { encodingCompletion?(.failure(error)) }
             }
         }
     }
-
+    
     // MARK: Private - Upload Implementation
-
+    
     private func upload(_ uploadable: UploadRequest.Uploadable) -> UploadRequest {
         do {
             let task = try uploadable.task(session: session, adapter: adapter, queue: queue)
             let upload = UploadRequest(session: session, requestTask: .upload(uploadable, task))
-
+            
             if case let .stream(inputStream, _) = uploadable {
                 upload.delegate.taskNeedNewBodyStream = { _, _ in inputStream }
             }
-
+            
             delegate[task] = upload
-
+            
             if startRequestsImmediately { upload.resume() }
-
+            
             return upload
         } catch {
             return upload(uploadable, failedWith: error)
         }
     }
-
+    
     private func upload(_ uploadable: UploadRequest.Uploadable?, failedWith error: Error) -> UploadRequest {
         var uploadTask: Request.RequestTask = .upload(nil, nil)
-
+        
         if let uploadable = uploadable {
             uploadTask = .upload(uploadable, nil)
         }
-
+        
         let underlyingError = error.underlyingAdaptError ?? error
         let upload = UploadRequest(session: session, requestTask: uploadTask, error: underlyingError)
-
+        
         if let retrier = retrier, error is AdaptError {
             allowRetrier(retrier, toRetry: upload, with: underlyingError)
         } else {
             if startRequestsImmediately { upload.resume() }
         }
-
+        
         return upload
     }
-
+    
 #if !os(watchOS)
-
+    
     // MARK: - Stream Request
-
+    
     // MARK: Hostname and Port
-
+    
     /// Creates a `StreamRequest` for bidirectional streaming using the `hostname` and `port`.
     ///
     /// If `startRequestsImmediately` is `true`, the request will have `resume()` called before being returned.
@@ -800,9 +836,9 @@ open class SessionManager {
     open func stream(withHostName hostName: String, port: Int) -> StreamRequest {
         return stream(.stream(hostName: hostName, port: port))
     }
-
+    
     // MARK: NetService
-
+    
     /// Creates a `StreamRequest` for bidirectional streaming using the `netService`.
     ///
     /// If `startRequestsImmediately` is `true`, the request will have `resume()` called before being returned.
@@ -815,78 +851,78 @@ open class SessionManager {
     open func stream(with netService: NetService) -> StreamRequest {
         return stream(.netService(netService))
     }
-
+    
     // MARK: Private - Stream Implementation
-
+    
     @available(iOS 9.0, macOS 10.11, tvOS 9.0, *)
     private func stream(_ streamable: StreamRequest.Streamable) -> StreamRequest {
         do {
             let task = try streamable.task(session: session, adapter: adapter, queue: queue)
             let request = StreamRequest(session: session, requestTask: .stream(streamable, task))
-
+            
             delegate[task] = request
-
+            
             if startRequestsImmediately { request.resume() }
-
+            
             return request
         } catch {
             return stream(failedWith: error)
         }
     }
-
+    
     @available(iOS 9.0, macOS 10.11, tvOS 9.0, *)
     private func stream(failedWith error: Error) -> StreamRequest {
         let stream = StreamRequest(session: session, requestTask: .stream(nil, nil), error: error)
         if startRequestsImmediately { stream.resume() }
         return stream
     }
-
+    
 #endif
-
+    
     // MARK: - Internal - Retry Request
-
+    
     func retry(_ request: Request) -> Bool {
         guard let originalTask = request.originalTask else { return false }
-
+        
         do {
             let task = try originalTask.task(session: session, adapter: adapter, queue: queue)
-
+            
             if let originalTask = request.task {
                 delegate[originalTask] = nil // removes the old request to avoid endless growth
             }
-
+            
             request.delegate.task = task // resets all task delegate data
-
+            
             request.retryCount += 1
             request.startTime = CFAbsoluteTimeGetCurrent()
             request.endTime = nil
-
+            
             task.resume()
-
+            
             return true
         } catch {
             request.delegate.error = error.underlyingAdaptError ?? error
             return false
         }
     }
-
+    
     private func allowRetrier(_ retrier: RequestRetrier, toRetry request: Request, with error: Error) {
         DispatchQueue.utility.async { [weak self] in
             guard let strongSelf = self else { return }
-
+            
             retrier.should(strongSelf, retry: request, with: error) { shouldRetry, timeDelay in
                 guard let strongSelf = self else { return }
-
+                
                 guard shouldRetry else {
                     if strongSelf.startRequestsImmediately { request.resume() }
                     return
                 }
-
+                
                 DispatchQueue.utility.after(timeDelay) {
                     guard let strongSelf = self else { return }
-
+                    
                     let retrySucceeded = strongSelf.retry(request)
-
+                    
                     if retrySucceeded, let task = request.task {
                         strongSelf.delegate[task] = request
                     } else {
